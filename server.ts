@@ -2057,7 +2057,7 @@ async function discoverColdLeads(
     searchQueries.map((u) =>
       fetchJsonWithTimeout<{
         items?: Array<{ login?: string; html_url?: string }>;
-      }>(u, 5000)
+      }>(u)
     )
   );
   for (const res of queryResults) {
