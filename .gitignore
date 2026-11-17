@@ -6,4 +6,5 @@ data/
 .env.*.local
 !.env.example
 Oguike_Godswill_CV.doc
+Oguike_Godswill_CV.pdf
 *.log

@@ -13,8 +13,12 @@ import { ImapFlow } from 'imapflow';
 import { chromium } from 'playwright-core';
 import { MongoClient, type Collection, type Db, type Document } from 'mongodb';
 import { GoogleGenAI } from '@google/genai';
-import { createServer as createViteServer } from 'vite';
-import { buildTailoredCvDocBase64, createSeedState } from './src/seedData';
+import {
+  buildTailoredCvDocBase64,
+  buildTailoredCvText,
+  buildWordDocFromCvText,
+  createSeedState,
+} from './src/seedData';
 import type {
   AlertItem,
   AppStatePayload,
@@ -30,7 +34,10 @@ import type {
 } from './src/types';
 
 const PORT = Number(process.env.PORT || 3000);
-const DATA_DIR = path.resolve(process.cwd(), 'data');
+const IS_VERCEL = Boolean(process.env.VERCEL);
+const DATA_DIR = IS_VERCEL
+  ? path.join('/tmp', 'careerrelay-data')
+  : path.resolve(process.cwd(), 'data');
 const STORE_PATH = path.join(DATA_DIR, 'store.json');
 const GEMINI_MODEL = process.env.GEMINI_MODEL || 'gemini-3.8-flash';
 const DEFAULT_MONGO_URI =
@@ -2265,7 +2272,7 @@ function classifyReplyFallback(
   };
 }
 
-async function startServer() {
+export async function createApp() {
   const app = express();
   app.use(cors());
   app.use(express.json({ limit: '10mb' }));
@@ -2278,7 +2285,7 @@ async function startServer() {
     );
   } catch (err) {
     console.warn(
-      `MongoDB not reachable at startup (${maskMongoUri(DEFAULT_MONGO_URI)}). Using local fallback store (data/store.json).`,
+      `MongoDB not reachable at startup (${maskMongoUri(DEFAULT_MONGO_URI)}). Using local fallback store (${STORE_PATH}).`,
       err instanceof Error ? err.message : ''
     );
     await readLocalMirror();
@@ -2708,6 +2715,30 @@ async function startServer() {
     res.json({ ok: true, state: fresh });
   });
 
+  async function renderCvPdfBuffer(cvText: string): Promise<Buffer> {
+    const executablePath = getSystemBrowserExecutable();
+    if (!executablePath) {
+      throw new Error('Local Chrome or Edge browser binary not found to render PDF.');
+    }
+    const browser = await chromium.launch({
+      executablePath,
+      headless: true,
+    });
+    try {
+      const page = await browser.newPage();
+      const html = buildWordDocFromCvText(cvText);
+      await page.setContent(html, { waitUntil: 'domcontentloaded' });
+      const pdfBytes = await page.pdf({
+        format: 'A4',
+        printBackground: true,
+        margin: { top: '0.5in', bottom: '0.5in', left: '0.55in', right: '0.55in' },
+      });
+      return Buffer.from(pdfBytes);
+    } finally {
+      await browser.close().catch(() => {});
+    }
+  }
+
   app.get('/api/cv/download', async (_req, res) => {
     const state = await readStore();
     const seedProfile = createSeedState().profile;
@@ -2718,6 +2749,40 @@ async function startServer() {
     res.setHeader('Content-Type', mime);
     res.setHeader('Content-Disposition', `attachment; filename="${fileName}"`);
     res.send(Buffer.from(base64, 'base64'));
+  });
+
+  app.get('/api/cv/download-pdf', async (req, res) => {
+    try {
+      const state = await readStore();
+      const seedProfile = createSeedState().profile;
+      const baseCvText = state.profile.cvText || seedProfile.cvText;
+      const trackParam = String(req.query.track || '').toLowerCase();
+      const cvText =
+        trackParam === 'flutter'
+          ? buildTailoredCvText(baseCvText, 'Flutter Mobile Engineer').cvText
+          : trackParam === 'react'
+            ? buildTailoredCvText(baseCvText, 'Frontend React Next.js Engineer').cvText
+            : baseCvText;
+
+      const pdfBuffer = await renderCvPdfBuffer(cvText);
+      await fs.mkdir(DATA_DIR, { recursive: true });
+      await fs.writeFile(path.join(DATA_DIR, 'Oguike_Godswill_CV.pdf'), pdfBuffer);
+      if (!IS_VERCEL) {
+        await fs.writeFile(path.resolve(process.cwd(), 'Oguike_Godswill_CV.pdf'), pdfBuffer);
+      }
+
+      res.setHeader('Content-Type', 'application/pdf');
+      res.setHeader(
+        'Content-Disposition',
+        'attachment; filename="Oguike_Godswill_CV.pdf"'
+      );
+      res.send(pdfBuffer);
+    } catch (error) {
+      console.error('PDF CV generation error:', error);
+      res.status(500).json({
+        error: error instanceof Error ? error.message : 'Failed to generate PDF CV',
+      });
+    }
   });
 
   app.post('/api/jobs/mark-applied', async (req, res) => {
@@ -4239,29 +4304,6 @@ ${state.profile.name}`,
     }
   });
 
-  const httpServer = http.createServer(app);
-
-  if (process.env.NODE_ENV === 'production') {
-    const distDir = path.resolve(process.cwd(), 'dist');
-    app.use(express.static(distDir));
-    app.get('*', (_req, res) => {
-      res.sendFile(path.join(distDir, 'index.html'));
-    });
-  } else {
-    const vite = await createViteServer({
-      server: {
-        middlewareMode: true,
-        hmr: { server: httpServer },
-      },
-      appType: 'spa',
-    });
-    app.use(vite.middlewares);
-  }
-
-  httpServer.listen(PORT, () => {
-    console.log(`CareerRelay server running at http://localhost:${PORT}`);
-  });
-
   let backgroundCycleRunning = false;
 
   async function runFullAutonomousBackgroundCycle() {
@@ -4276,7 +4318,7 @@ ${state.profile.name}`,
       const jobOutcome = await runAutopilotCycle();
       const coldOutcome = await runColdOutreachCycle();
       const portalOutcome =
-        current.profile.autoSendEnabled !== false
+        current.profile.autoSendEnabled !== false && !IS_VERCEL
           ? await runPortalAutoApplyCycle(undefined, 2)
           : { resolvedEmailCount: 0, formAppliedCount: 0, captchaPausedCount: 0 };
       const syncOutcome = await runGmailInboxSyncCycle().catch(() => ({
@@ -4326,6 +4368,48 @@ ${state.profile.name}`,
     }
   }
 
+  app.get('/api/cron/autopilot', async (req, res) => {
+    const cronSecret = (process.env.CRON_SECRET || '').trim();
+    const authHeader = req.headers.authorization || '';
+    const authorizedByCronSecret =
+      Boolean(cronSecret) && authHeader === `Bearer ${cronSecret}`;
+    if (!authorizedByCronSecret && !isRequestAuthenticated(req)) {
+      res.status(401).json({ error: 'Unauthorized' });
+      return;
+    }
+    await runFullAutonomousBackgroundCycle();
+    res.json({ ok: true, ranAt: new Date().toISOString() });
+  });
+
+  return { app, runFullAutonomousBackgroundCycle };
+}
+
+async function startServer() {
+  const { app, runFullAutonomousBackgroundCycle } = await createApp();
+  const httpServer = http.createServer(app);
+
+  if (process.env.NODE_ENV === 'production') {
+    const distDir = path.resolve(process.cwd(), 'dist');
+    app.use(express.static(distDir));
+    app.get('*', (_req, res) => {
+      res.sendFile(path.join(distDir, 'index.html'));
+    });
+  } else {
+    const { createServer: createViteServer } = await import('vite');
+    const vite = await createViteServer({
+      server: {
+        middlewareMode: true,
+        hmr: { server: httpServer },
+      },
+      appType: 'spa',
+    });
+    app.use(vite.middlewares);
+  }
+
+  httpServer.listen(PORT, () => {
+    console.log(`CareerRelay server running at http://localhost:${PORT}`);
+  });
+
   // Run one initial autonomous check 45s after boot, then every 15 minutes
   setTimeout(() => {
     void runFullAutonomousBackgroundCycle();
@@ -4336,7 +4420,9 @@ ${state.profile.name}`,
   }, 15 * 60 * 1000);
 }
 
-startServer().catch((err) => {
-  console.error('Failed to start CareerRelay server:', err);
-  process.exit(1);
-});
+if (!IS_VERCEL) {
+  startServer().catch((err) => {
+    console.error('Failed to start CareerRelay server:', err);
+    process.exit(1);
+  });
+}

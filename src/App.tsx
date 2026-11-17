@@ -1570,6 +1570,13 @@ export default function App() {
                       <Download className="h-3.5 w-3.5 text-[#475569]" />
                       Download .doc CV
                     </a>
+                    <a
+                      href="/api/cv/download-pdf"
+                      className="inline-flex items-center gap-1.5 rounded-md border border-[#2563EB]/40 bg-blue-50 px-3 py-1.5 text-xs font-medium text-[#2563EB] hover:bg-blue-100"
+                    >
+                      <Download className="h-3.5 w-3.5 text-[#2563EB]" />
+                      Download .pdf CV
+                    </a>
                     <button
                       type="button"
                       onClick={() => {
