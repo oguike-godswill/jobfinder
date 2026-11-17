@@ -10,7 +10,6 @@ import http from 'node:http';
 import path from 'node:path';
 import nodemailer from 'nodemailer';
 import { ImapFlow } from 'imapflow';
-import { chromium } from 'playwright-core';
 import { MongoClient, type Collection, type Db, type Document } from 'mongodb';
 import { GoogleGenAI } from '@google/genai';
 import {
@@ -18,7 +17,7 @@ import {
   buildTailoredCvText,
   buildWordDocFromCvText,
   createSeedState,
-} from './src/seedData';
+} from './src/seedData.js';
 import type {
   AlertItem,
   AppStatePayload,
@@ -31,7 +30,7 @@ import type {
   ReplyStage,
   ScoutedJob,
   UserProfile,
-} from './src/types';
+} from './src/types.js';
 
 const PORT = Number(process.env.PORT || 3000);
 const IS_VERCEL = Boolean(process.env.VERCEL);
@@ -936,6 +935,7 @@ async function attemptWebPortalAutoApply(
     );
   }
 
+  const { chromium } = await import('playwright-core');
   const browser = await chromium.launch({
     executablePath,
     headless: true,
@@ -2720,6 +2720,7 @@ export async function createApp() {
     if (!executablePath) {
       throw new Error('Local Chrome or Edge browser binary not found to render PDF.');
     }
+    const { chromium } = await import('playwright-core');
     const browser = await chromium.launch({
       executablePath,
       headless: true,
@@ -3040,7 +3041,7 @@ Return ONLY valid JSON (no markdown commentary) with this exact structure:
     }
 
     if (newJobs.length === 0) {
-      newJobs = await scoutLivePublicJobBoards(profile, existingTitles);
+      newJobs = await scoutLivePublicJobBoards(profile, existingTitles as Set<string>);
     }
 
     const newAlerts: AlertItem[] = newJobs

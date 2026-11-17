@@ -1,4 +1,4 @@
-import type { AppStatePayload } from './types';
+import type { AppStatePayload } from './types.js';
 
 const OGUIKE_CV_TEXT = `OGUIKE GODSWILL
 FRONTEND & CROSS-PLATFORM ENGINEER (REACT · NEXT.JS · TYPESCRIPT · FLUTTER)
