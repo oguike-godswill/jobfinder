@@ -78,6 +78,8 @@ export interface ColdEmailLead {
   sentAt?: string;
   followedUpAt?: string;
   source: string;
+  techTrack?: 'flutter' | 'react_next' | 'general';
+  highlightedRepo?: string;
   createdAt: string;
   updatedAt: string;
 }

@@ -1894,6 +1894,27 @@ function normalizeWebsiteUrl(raw: string | undefined): string {
   return /^https?:\/\//i.test(t) ? t : `https://${t}`;
 }
 
+function detectOrgTechTrack(
+  bio: string,
+  repos: Array<{ name?: string; description?: string | null; language?: string | null }>
+): { techTrack: 'flutter' | 'react_next' | 'general'; highlightedRepo?: string } {
+  const flutterRepo = repos.find((r) =>
+    /flutter|dart/i.test(`${r.language || ''} ${r.name || ''} ${r.description || ''}`)
+  );
+  if (flutterRepo || /\b(flutter|dart)\b/i.test(bio)) {
+    return { techTrack: 'flutter', highlightedRepo: flutterRepo?.name };
+  }
+  const reactRepo = repos.find((r) =>
+    /react|next|typescript|javascript/i.test(
+      `${r.language || ''} ${r.name || ''} ${r.description || ''}`
+    )
+  );
+  if (reactRepo || /\b(react|next\.?js|typescript|frontend)\b/i.test(bio)) {
+    return { techTrack: 'react_next', highlightedRepo: reactRepo?.name };
+  }
+  return { techTrack: 'general', highlightedRepo: repos[0]?.name };
+}
+
 function buildColdPitchForCompany(params: {
   company: string;
   contactEmail: string;
@@ -1902,26 +1923,53 @@ function buildColdPitchForCompany(params: {
   location: string;
   companyBio: string;
   source: string;
+  techTrack?: 'flutter' | 'react_next' | 'general';
+  highlightedRepo?: string;
   profile: UserProfile;
 }): ColdEmailLead {
   const now = new Date().toISOString();
+  const track = params.techTrack || 'general';
+  const repoMention = params.highlightedRepo
+    ? ` (especially your ${params.highlightedRepo} work)`
+    : '';
   const bioLine = params.companyBio
-    ? `I have been following what your team is building at ${params.company} (${params.companyBio.slice(
+    ? `I have been following what your team is building at ${params.company}${repoMention} (${params.companyBio.slice(
         0,
         140
       )})`
-    : `I have been following ${params.company}'s work${
+    : `I have been following ${params.company}'s engineering work${repoMention}${
         params.websiteUrl ? ` (${params.websiteUrl})` : ''
       }`;
 
-  const subject = `Frontend Engineer (React / Next.js / Flutter) — ${params.company}`;
+  const subject =
+    track === 'flutter'
+      ? `Flutter Mobile Engineer (RunBuddy · Solis · Verso) — ${params.company}`
+      : track === 'react_next'
+        ? `Frontend Engineer (React 19 · Next.js · TypeScript) — ${params.company}`
+        : `Frontend & Flutter Engineer — ${params.company}`;
+
+  const stackPitch =
+    track === 'flutter'
+      ? `I am a Flutter & Cross-Platform Mobile Engineer in ${
+          params.location || 'Lagos, Nigeria'
+        } building production Flutter apps including RunBuddy (Riverpod, GPS tracking, LiveKit voice & WebSockets), Solis (Provider, audio guides & JWT refresh-token auth), and Verso (Neon PostgreSQL & TTS).`
+      : track === 'react_next'
+        ? `I am a Frontend Engineer in ${
+            params.location || 'Lagos, Nigeria'
+          } building production React 19 / Next.js / TypeScript platforms at ConnectNigeria (Marketplace & Digital Goods Creator) alongside shipped full-stack apps including PocketGuard (https://pocket-guard-psi.vercel.app), Molearn (https://molearn.vercel.app), and LegitAutos (https://legitautomobile.com/).`
+        : `I am a Frontend & Cross-Platform Engineer in ${
+            params.location || 'Lagos, Nigeria'
+          } shipping production React/Next.js web apps (ConnectNigeria Marketplace & Creator, PocketGuard, Molearn, LegitAutos) and Flutter mobile apps (RunBuddy, Solis, Verso).`;
+
   const pitchBody = `Hi ${params.company} Team,
 
 ${bioLine} and wanted to reach out directly.
 
-I am a Frontend & Cross-Platform Engineer in ${params.location || 'Lagos, Nigeria'} shipping both production React/Next.js web apps (ConnectNigeria Marketplace & Creator, LegitAutos at https://legitautomobile.com/, Molearn, and PocketGuard) and Flutter mobile apps (RunBuddy, Solis, and Verso).
+${stackPitch}
 
-Are you looking for an extra pair of hands on your frontend or mobile engineering team this quarter? I have attached my CV (${
+Are you looking for an extra pair of hands on your ${
+    track === 'flutter' ? 'mobile (Flutter)' : track === 'react_next' ? 'frontend (React/Next.js)' : 'frontend or mobile'
+  } engineering team this quarter? I have attached my tailored CV (${
     params.profile.cvAttachmentName || 'Oguike_Godswill_CV.doc'
   }) and my portfolio is at https://oguikegodswill.vercel.app.
 
@@ -1931,7 +1979,9 @@ ${params.profile.name}
 
   const followUpBody = `Hi ${params.company} Team,
 
-Just floating my note back up in case it got buried—I would love to connect if you have any upcoming Frontend (React/Next.js/TypeScript) or Flutter work at ${params.company}. My CV is attached again for convenience.
+Just floating my note back up in case it got buried—I would love to connect if you have any upcoming ${
+    track === 'flutter' ? 'Flutter / Dart mobile' : track === 'react_next' ? 'React / Next.js / TypeScript' : 'Frontend or Flutter'
+  } engineering work at ${params.company}. My CV is attached again for convenience.
 
 Best regards,
 ${params.profile.name}
@@ -1950,9 +2000,34 @@ ${params.profile.name}
     followUpBody,
     status: 'ready_to_pitch',
     source: params.source,
+    techTrack: track,
+    highlightedRepo: params.highlightedRepo,
     createdAt: now,
     updatedAt: now,
   };
+}
+
+async function scrapeVerifiedMailtoFromPages(siteUrl: string): Promise<string> {
+  const urlsToTry: string[] = [siteUrl];
+  try {
+    const origin = new URL(siteUrl).origin;
+    urlsToTry.push(`${origin}/contact`, `${origin}/about`, `${origin}/careers`);
+  } catch {
+    // ignore invalid URL
+  }
+  for (let i = 0; i < urlsToTry.length; i++) {
+    const html = await fetchTextWithTimeout(urlsToTry[i], i === 0 ? 3500 : 2500);
+    if (!html) continue;
+    const mailtoMatches = Array.from(
+      html.matchAll(/mailto:([a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,})/gi)
+    ).map((m) => m[1].trim());
+    for (const candidate of mailtoMatches) {
+      if (isUsableEmailCandidate(candidate) && (await verifyEmailMx(candidate))) {
+        return candidate;
+      }
+    }
+  }
+  return '';
 }
 
 async function discoverColdLeads(
@@ -1965,23 +2040,28 @@ async function discoverColdLeads(
     /chapter|student|university|club|gdsc|dsc|saturday|communitypro|namtes|devfest|school|academy|bootcamp|youth|awesome-|freecodecamp|roadmap|tutorial|course/i;
 
   const searchQueries = [
-    'https://api.github.com/search/users?q=location:Lagos+type:org&per_page=25',
-    'https://api.github.com/search/users?q=location:Nigeria+type:org&per_page=25',
-    'https://api.github.com/search/users?q=location:Remote+type:org&per_page=25',
-    'https://api.github.com/search/users?q=flutter+in:description+type:org&per_page=25',
-    'https://api.github.com/search/users?q=nextjs+in:description+type:org&per_page=25',
-    'https://api.github.com/search/users?q=location:London+type:org&per_page=25',
-    'https://api.github.com/search/users?q=location:Berlin+type:org&per_page=25',
+    'https://api.github.com/search/users?q=location:Lagos+type:org&per_page=15',
+    'https://api.github.com/search/users?q=location:Remote+type:org&per_page=15',
+    'https://api.github.com/search/users?q=flutter+in:description+type:org&per_page=15',
+    'https://api.github.com/search/users?q=nextjs+in:description+type:org&per_page=15',
+    'https://api.github.com/search/users?q=location:London+type:org&per_page=15',
+    'https://api.github.com/search/users?q=location:Berlin+type:org&per_page=15',
+    'https://api.github.com/search/users?q=location:Nigeria+type:org&per_page=15',
   ];
 
   const candidateLogins: Array<{ login: string; html_url?: string }> = [];
   const seenLogins = new Set<string>();
 
-  for (const url of searchQueries) {
-    if (candidateLogins.length >= 15) break;
-    const res = await fetchJsonWithTimeout<{
-      items?: Array<{ login?: string; html_url?: string }>;
-    }>(url);
+  // Balanced round-robin: pick up to 3 unseen candidates per query so batches mix regions & stacks
+  const queryResults = await Promise.all(
+    searchQueries.map((u) =>
+      fetchJsonWithTimeout<{
+        items?: Array<{ login?: string; html_url?: string }>;
+      }>(u, 5000)
+    )
+  );
+  for (const res of queryResults) {
+    let addedForQuery = 0;
     for (const item of res?.items || []) {
       const login = item.login?.trim();
       if (!login) continue;
@@ -1995,21 +2075,28 @@ async function discoverColdLeads(
       }
       seenLogins.add(lower);
       candidateLogins.push({ login, html_url: item.html_url });
-      if (candidateLogins.length >= 18) break;
+      addedForQuery += 1;
+      if (addedForQuery >= 3 || candidateLogins.length >= 18) break;
     }
+    if (candidateLogins.length >= 18) break;
   }
 
   for (const cand of candidateLogins.slice(0, 18)) {
     if (leads.length >= 5) break;
-    const detail = await fetchJsonWithTimeout<{
-      login?: string;
-      name?: string;
-      email?: string | null;
-      blog?: string | null;
-      location?: string | null;
-      description?: string | null;
-      html_url?: string;
-    }>(`https://api.github.com/users/${cand.login}`);
+    const [detail, repos] = await Promise.all([
+      fetchJsonWithTimeout<{
+        login?: string;
+        name?: string;
+        email?: string | null;
+        blog?: string | null;
+        location?: string | null;
+        description?: string | null;
+        html_url?: string;
+      }>(`https://api.github.com/users/${cand.login}`),
+      fetchJsonWithTimeout<
+        Array<{ name?: string; description?: string | null; language?: string | null }>
+      >(`https://api.github.com/users/${cand.login}/repos?sort=updated&per_page=5`),
+    ]);
 
     if (!detail) continue;
     const company = (detail.name || detail.login || cand.login).trim();
@@ -2033,27 +2120,24 @@ async function discoverColdLeads(
       contactEmail = detail.email.trim();
     }
 
-    // Step B: Fallback to scraping mailto: links from company website + DNS MX verification
+    // Step B: Fallback to scraping mailto: links across homepage /contact /about /careers
     if (!contactEmail && detail.blog) {
       const siteUrl = normalizeWebsiteUrl(detail.blog);
-      const html = siteUrl ? await fetchTextWithTimeout(siteUrl, 3500) : null;
-      if (html) {
-        const mailtoMatches = Array.from(
-          html.matchAll(/mailto:([a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,})/gi)
-        ).map((m) => m[1].trim());
-        for (const candidate of mailtoMatches) {
-          if (isUsableEmailCandidate(candidate) && (await verifyEmailMx(candidate))) {
-            contactEmail = candidate;
-            leadSource = 'GitHub Org + Website Mailto';
-            break;
-          }
-        }
+      const scraped = siteUrl ? await scrapeVerifiedMailtoFromPages(siteUrl) : '';
+      if (scraped) {
+        contactEmail = scraped;
+        leadSource = 'GitHub Org + Website Mailto';
       }
     }
 
     if (!contactEmail || existingEmails.has(contactEmail.toLowerCase())) {
       continue;
     }
+
+    const { techTrack, highlightedRepo } = detectOrgTechTrack(
+      detail.description || '',
+      Array.isArray(repos) ? repos : []
+    );
 
     existingEmails.add(contactEmail.toLowerCase());
     existingCompanies.add(company.toLowerCase());
@@ -2067,6 +2151,8 @@ async function discoverColdLeads(
         location: detail.location || 'Remote / Global',
         companyBio: detail.description || '',
         source: leadSource,
+        techTrack,
+        highlightedRepo,
         profile,
       })
     );
@@ -2472,8 +2558,10 @@ export async function createApp() {
 
     const bouncedEmails = new Set<string>();
     let nextApps = [...state.applications];
+    let nextColdLeads = [...(state.coldLeads || [])];
     const newReplyAlerts: AlertItem[] = [];
     const classifiedAppIds = new Set<string>();
+    const repliedColdIds = new Set<string>();
     let autoClassifiedCount = 0;
     const nowIso = new Date().toISOString();
 
@@ -2601,6 +2689,43 @@ export async function createApp() {
                 `${matchedApp.role}: ${fb.feedback}\nNext: ${fb.nextStep}`
               );
             }
+          } else {
+            const matchedCold = nextColdLeads.find((lead) => {
+              const domain = extractDomain(lead.contactEmail);
+              return (
+                (lead.status === 'sent' || lead.status === 'followed_up') &&
+                !repliedColdIds.has(lead.id) &&
+                ((lead.contactEmail &&
+                  fromAddr.toLowerCase().includes(lead.contactEmail.toLowerCase())) ||
+                  (domain &&
+                    !domain.endsWith('.example') &&
+                    domain !== 'gmail.com' &&
+                    fromAddr.toLowerCase().includes(domain)))
+              );
+            });
+            if (matchedCold) {
+              repliedColdIds.add(matchedCold.id);
+              const snippet = extractBodySnippet(msg.source);
+              nextColdLeads = nextColdLeads.map((l) =>
+                l.id === matchedCold.id
+                  ? { ...l, status: 'replied' as const, updatedAt: nowIso }
+                  : l
+              );
+              newReplyAlerts.push({
+                id: `alert-cold-reply-${Date.now()}-${matchedCold.id}`,
+                type: 'recruiter_reply',
+                title: `Cold Pitch Reply — ${matchedCold.company}`,
+                message: (snippet || subject || 'Reply received in Gmail').slice(0, 220),
+                read: false,
+                createdAt: nowIso,
+              });
+              autoClassifiedCount += 1;
+              void sendInstantPhoneAlert(
+                state.profile,
+                `Cold Pitch Reply: ${matchedCold.company}`,
+                (snippet || subject || 'Reply received in Gmail').slice(0, 180)
+              );
+            }
           }
         }
       }
@@ -2610,7 +2735,6 @@ export async function createApp() {
     }
 
     let nextJobs = state.jobs;
-    let nextColdLeads = state.coldLeads || [];
     const newBounceAlerts: AlertItem[] = [];
 
     if (bouncedEmails.size > 0) {
@@ -2658,7 +2782,7 @@ export async function createApp() {
           : job
       );
 
-      nextColdLeads = (state.coldLeads || []).map((lead) =>
+      nextColdLeads = nextColdLeads.map((lead) =>
         bouncedEmails.has(lead.contactEmail.toLowerCase())
           ? { ...lead, status: 'dismissed' as const, updatedAt: nowIso }
           : lead
@@ -3334,6 +3458,8 @@ Return ONLY valid JSON (no markdown commentary) with this exact structure:
         location: lead.location,
         companyBio: lead.companyBio || '',
         source: lead.source,
+        techTrack: lead.techTrack,
+        highlightedRepo: lead.highlightedRepo,
         profile,
       });
       return {
@@ -3376,6 +3502,12 @@ Return ONLY valid JSON (no markdown commentary) with this exact structure:
           (await verifyEmailMx(lead.contactEmail))
         ) {
           try {
+            const tailoredColdCv = buildTailoredCvDocBase64(
+              profile.cvText,
+              lead.techTrack === 'flutter'
+                ? 'Flutter Mobile Engineer'
+                : 'Frontend React Next.js Engineer'
+            );
             const res = await sendApplicationViaServerSmtp({
               toEmail: lead.contactEmail,
               subject: lead.subject,
@@ -3383,7 +3515,7 @@ Return ONLY valid JSON (no markdown commentary) with this exact structure:
               fromName: profile.name,
               attachmentName: profile.cvAttachmentName,
               attachmentMime: profile.cvAttachmentMime,
-              attachmentBase64: profile.cvAttachmentBase64,
+              attachmentBase64: tailoredColdCv.base64,
             });
             sentTodayCount += 1;
             sentThisCycleCount += 1;
@@ -3437,6 +3569,12 @@ Return ONLY valid JSON (no markdown commentary) with this exact structure:
           (await verifyEmailMx(lead.contactEmail))
         ) {
           try {
+            const tailoredFollowUpCv = buildTailoredCvDocBase64(
+              profile.cvText,
+              lead.techTrack === 'flutter'
+                ? 'Flutter Mobile Engineer'
+                : 'Frontend React Next.js Engineer'
+            );
             await sendApplicationViaServerSmtp({
               toEmail: lead.contactEmail,
               subject: `Re: ${lead.subject}`,
@@ -3444,7 +3582,7 @@ Return ONLY valid JSON (no markdown commentary) with this exact structure:
               fromName: profile.name,
               attachmentName: profile.cvAttachmentName,
               attachmentMime: profile.cvAttachmentMime,
-              attachmentBase64: profile.cvAttachmentBase64,
+              attachmentBase64: tailoredFollowUpCv.base64,
             });
             sentThisCycleCount += 1;
             followUpSentCount += 1;
